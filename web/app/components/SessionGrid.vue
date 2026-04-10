@@ -109,15 +109,20 @@ function startCreateSession() {
 }
 
 async function commitCreateSession() {
+  if (!creatingSession.value) return
   const name = newSessionName.value.trim()
   creatingSession.value = false
   if (!name) return
   await safeCall(async () => {
     await api.createSession(name)
+    // Session may already be in the tree (WebSocket update arrived before API response).
+    if (props.sessions.find(s => s.name === name)) {
+      emit('select', name)
+      return
+    }
     const stop = watch(
       () => props.sessions.find(s => s.name === name),
       (s) => { if (s) { emit('select', name); stop() } },
-      { immediate: true },
     )
     setTimeout(stop, 5000)
   })

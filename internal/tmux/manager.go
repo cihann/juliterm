@@ -609,11 +609,13 @@ func (m *Manager) syncSessions() {
 		knownIDs[s.ID] = true
 	}
 
-	// Safety check: if tmux returned zero sessions but we have known
-	// sessions, something is likely wrong (transient tmux error). Do not
-	// wipe the tree — log a warning and bail out.
+	// When tmux legitimately has zero sessions (all killed), remove
+	// everything from the tree so the UI doesn't show stale entries.
 	if len(current) == 0 && len(known) > 0 {
-		log.Printf("tmux manager: syncSessions got 0 sessions from tmux but tree has %d — skipping removal", len(known))
+		log.Printf("tmux manager: all tmux sessions gone — clearing tree (%d removed)", len(known))
+		for _, s := range known {
+			m.removeSession(s.ID)
+		}
 		return
 	}
 
@@ -763,6 +765,8 @@ func (m *Manager) startWatcher() error {
 		if len(sessions) > 0 {
 			m.syncSessions()
 		} else {
+			// All sessions are gone — clear stale entries from the tree.
+			m.syncSessions()
 			go m.pollForSessions()
 		}
 	}()
@@ -981,6 +985,7 @@ func (m *Manager) listSessions() ([]*Session, error) {
 			stderr := string(exitErr.Stderr)
 			if strings.Contains(stderr, "no server running") ||
 				strings.Contains(stderr, "no sessions") ||
+				strings.Contains(stderr, "error connecting to") ||
 				len(strings.TrimSpace(stderr)) == 0 {
 				return []*Session{}, nil
 			}
