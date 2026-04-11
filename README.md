@@ -130,12 +130,11 @@ apt install cloudflared
 
 `cloudflared tunnel --url http://localhost:<port>` runs as a child process. Juli parses the generated URL from its output, prints it with a QR code, and stops the tunnel on exit. If cloudflared is not installed or the tunnel fails to start, Juli logs a warning and continues serving locally.
 
-### Security considerations
+### Tunnel security
 
 - The tunnel URL is **temporary** and changes every time Juli restarts.
 - Anyone with the URL still needs the `--token` to authenticate.
-- Use a strong, unique token when exposing Juli to the internet.
-- For persistent remote access, consider running Juli behind a reverse proxy with TLS instead.
+- See the [Security](#security) section below for general guidance.
 
 ## Configuration
 
@@ -243,6 +242,16 @@ Juli connects your browser to tmux through a lightweight bridge:
 5. When tmux state changes (new window, closed pane), the server broadcasts an updated session tree to all clients.
 
 Split panes are "fire and forget" — Juli sends `tmux split-window` and `send-keys` commands, then tmux renders the splits natively inside the existing PTY. No new WebSocket connections or xterm.js instances are created.
+
+## Security
+
+**Juli gives every authenticated user full shell access.** This is by design — it is a terminal client. Anyone who can log in can run arbitrary commands with the privileges of the Juli process, whether by typing into the terminal, using the split-pane custom command feature, or calling the API directly.
+
+This means:
+
+- **Treat the token like a root password.** Use a strong, unique value. Do not share it with anyone you wouldn't give SSH access to.
+- **Do not expose Juli to the public internet without TLS.** The token is sent in plain text over HTTP. Use `--tls-cert`/`--tls-key`, a reverse proxy, or the `--tunnel` flag (which provides TLS via Cloudflare).
+- **Juli is single-user by design.** There are no roles, permissions, or audit logs. If you need multi-user access control, put Juli behind an authenticating reverse proxy.
 
 ## License
 
