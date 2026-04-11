@@ -6,18 +6,73 @@ import { WebLinksAddon } from '@xterm/addon-web-links'
 import '@xterm/xterm/css/xterm.css'
 
 import { useTerminalSocket } from '~/composables/useTerminalSocket'
+import { useSessionApi } from '~/composables/useSessionApi'
 
 const props = defineProps<{
   sessionName: string | null
 }>()
 
+const emit = defineEmits<{
+  error: [message: string]
+}>()
+
 const terminalRef = ref<HTMLDivElement | null>(null)
 const socket = useTerminalSocket()
+const sessionTree = useSessionTree()
+const api = useSessionApi()
+
+// Context menu state
+const ctxVisible = ref(false)
+const ctxX = ref(0)
+const ctxY = ref(0)
+
+const isZoomed = computed(() => {
+  if (!props.sessionName) return false
+  const session = sessionTree.findSession(props.sessionName)
+  if (!session) return false
+  const activeWindow = session.windows.find(w => w.active)
+  return activeWindow?.zoomed ?? false
+})
+
+function onContextMenu(e: MouseEvent) {
+  e.preventDefault()
+  if (!props.sessionName) return
+  ctxX.value = e.clientX
+  ctxY.value = e.clientY
+  ctxVisible.value = true
+}
+
+async function onCtxAction(action: string) {
+  if (!props.sessionName) return
+  try {
+    switch (action) {
+      case 'horizontal-split':
+        await api.splitWindow(props.sessionName, 'custom', undefined, 'horizontal')
+        break
+      case 'vertical-split':
+        await api.splitWindow(props.sessionName, 'custom', undefined, 'vertical')
+        break
+      case 'kill-pane':
+        await api.killPane(props.sessionName)
+        break
+      case 'zoom':
+        await api.zoomPane(props.sessionName)
+        break
+    }
+  } catch (e: unknown) {
+    const message = e instanceof Error ? e.message : 'Operation failed'
+    emit('error', message)
+  }
+}
 
 let terminal: Terminal | null = null
 let fitAddon: FitAddon | null = null
 let resizeObserver: ResizeObserver | null = null
 let unsubOutput: (() => void) | null = null
+
+function stopRightClickPropagation(e: MouseEvent) {
+  if (e.button === 2) e.stopPropagation()
+}
 
 onMounted(() => {
   terminal = new Terminal({
@@ -58,6 +113,10 @@ onMounted(() => {
     requestAnimationFrame(() => {
       fitAddon?.fit()
     })
+
+    // Intercept right-click before xterm.js can forward it to tmux as mouse button-3.
+    // Without this, tmux's native menu appears underneath our HTML context menu.
+    terminalRef.value.addEventListener('mousedown', stopRightClickPropagation, true)
   }
 
   // Handle user input — send raw bytes directly to PTY
@@ -124,6 +183,7 @@ watch(
 onBeforeUnmount(() => {
   unsubOutput?.()
   unsubOutput = null
+  terminalRef.value?.removeEventListener('mousedown', stopRightClickPropagation, true)
   if (resizeObserver) {
     resizeObserver.disconnect()
     resizeObserver = null
@@ -156,7 +216,16 @@ onBeforeUnmount(() => {
     </div>
 
     <!-- Terminal -->
-    <div ref="terminalRef" class="terminal-element" @contextmenu.prevent />
+    <div ref="terminalRef" class="terminal-element" @contextmenu="onContextMenu" />
+
+    <TerminalContextMenu
+      :visible="ctxVisible"
+      :x="ctxX"
+      :y="ctxY"
+      :zoomed="isZoomed"
+      @action="onCtxAction"
+      @close="ctxVisible = false"
+    />
   </div>
 </template>
 

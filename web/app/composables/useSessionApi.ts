@@ -46,10 +46,11 @@ export function useSessionApi() {
     )
   }
 
-  async function splitWindow(sessionName: string, preset: string, command?: string) {
+  async function splitWindow(sessionName: string, preset: string, command?: string, direction?: string) {
     await apiCall(`/api/sessions/${encodeURIComponent(sessionName)}/split`, 'POST', {
       preset,
       ...(command !== undefined && { command }),
+      ...(direction !== undefined && { direction }),
     })
   }
 
@@ -64,6 +65,10 @@ export function useSessionApi() {
 
   async function zoomPane(sessionName: string) {
     await apiCall(`/api/sessions/${encodeURIComponent(sessionName)}/zoom`, 'POST')
+  }
+
+  async function killPane(sessionName: string) {
+    await apiCall(`/api/sessions/${encodeURIComponent(sessionName)}/pane`, 'DELETE')
   }
 
   interface Preset {
@@ -83,7 +88,7 @@ export function useSessionApi() {
   return {
     createSession, renameSession, killSession,
     createWindow, renameWindow, killWindow,
-    splitWindow, detectTestCommand, zoomPane,
+    splitWindow, detectTestCommand, zoomPane, killPane,
     getPresets,
   }
 }

@@ -26,6 +26,7 @@ type Window struct {
 	Name   string  `json:"name"`
 	Index  int     `json:"index"`
 	Active bool    `json:"active"` // is this the active window?
+	Zoomed bool    `json:"zoomed"` // is the window in zoomed state?
 	Panes  []*Pane `json:"panes"`
 }
 
@@ -258,7 +259,7 @@ func ParseSessionList(output string) ([]*Session, error) {
 
 // ParseWindowList parses the output of:
 //
-//	tmux list-windows -F '#{window_id}\t#{window_name}\t#{window_index}\t#{window_active}'
+//	tmux list-windows -F '#{window_id}\t#{window_name}\t#{window_index}\t#{window_active}\t#{window_zoomed_flag}'
 func ParseWindowList(output string) ([]*Window, error) {
 	var windows []*Window
 	for _, line := range splitLines(output) {
@@ -274,11 +275,18 @@ func ParseWindowList(output string) ([]*Window, error) {
 		if err != nil {
 			return nil, fmt.Errorf("invalid window active flag %q: %w", parts[3], err)
 		}
+		var zoomed bool
+		if len(parts) >= 5 {
+			if z, err := strconv.Atoi(parts[4]); err == nil {
+				zoomed = z == 1
+			}
+		}
 		windows = append(windows, &Window{
 			ID:     parts[0],
 			Name:   parts[1],
 			Index:  idx,
 			Active: active == 1,
+			Zoomed: zoomed,
 		})
 	}
 	sortWindows(windows)
@@ -375,6 +383,7 @@ func cloneWindow(w *Window) *Window {
 		Name:   w.Name,
 		Index:  w.Index,
 		Active: w.Active,
+		Zoomed: w.Zoomed,
 		Panes:  make([]*Pane, len(w.Panes)),
 	}
 	for i, p := range w.Panes {

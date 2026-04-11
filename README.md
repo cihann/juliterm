@@ -63,25 +63,17 @@ Open `http://localhost:8080` in your browser, enter the token, and you'll see yo
 
 ## Right-click pane menu
 
-Right-click inside the terminal to open tmux's built-in pane menu. You can click on items or press the shortcut key in parentheses.
+Right-click inside the terminal to open Juli's pane menu:
 
 ```
-────────── 0 (%23) ──────────
-  Horizontal Split  (h)
-  Vertical Split    (v)
-─────────────────────────────
-  Swap Up
-  Swap Down
-  Swap Marked
-─────────────────────────────
-  Kill              (X)
-  Respawn           (R)
-  Mark              (m)
-  Zoom
-─────────────────────────────
+  Horizontal Split   h
+  Vertical Split     v
+  ───────────────────
+  Kill               x
+  Zoom               z
 ```
 
-Grayed-out items (like Swap or Zoom) are unavailable in the current context — for example, Zoom is disabled when there's only one pane.
+Juli intercepts the right-click and shows its own context menu instead of forwarding the event to tmux. This is intentional — tmux has a built-in right-click menu when mouse mode is enabled (`set -g mouse on`), but it only works with mouse mode on, renders as text inside the terminal, and cannot be styled or extended. Juli's menu works regardless of tmux's mouse mode setting, stays visually consistent with the rest of the UI, and can be extended with Juli-specific actions in the future.
 
 ## Split pane toolbar
 

@@ -19,6 +19,7 @@ interface Window {
   name: string
   index: number
   active: boolean
+  zoomed: boolean
   panes: Pane[]
 }
 
@@ -63,6 +64,7 @@ export function useSessionTree() {
         name: w.name ?? '',
         index: w.index ?? 0,
         active: w.active ?? false,
+        zoomed: w.zoomed ?? false,
         panes: (w.panes ?? []).map((p: any) => ({
           id: p.id ?? '',
           width: p.width ?? 0,

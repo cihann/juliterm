@@ -38,6 +38,7 @@ type SessionManager interface {
 	DetectTestCommand(ctx context.Context, sessionName string) (string, error)
 	PaneCwd(ctx context.Context, sessionName string) (string, error)
 	ZoomPane(ctx context.Context, sessionName string) error
+	KillPane(ctx context.Context, sessionName string) error
 }
 
 // Server is the main HTTP/WebSocket server for Juli.
@@ -174,6 +175,7 @@ func (s *Server) setupRoutes(mux *http.ServeMux) {
 	mux.Handle("POST /api/sessions/{session}/split", s.authMiddleware(http.HandlerFunc(s.handleSplitWindow)))
 	mux.Handle("GET /api/sessions/{session}/detect-test", s.authMiddleware(http.HandlerFunc(s.handleDetectTest)))
 	mux.Handle("POST /api/sessions/{session}/zoom", s.authMiddleware(http.HandlerFunc(s.handleZoomPane)))
+	mux.Handle("DELETE /api/sessions/{session}/pane", s.authMiddleware(http.HandlerFunc(s.handleKillPane)))
 
 	if s.spaFS != nil {
 		fileServer := http.FileServer(s.spaFS)

@@ -169,7 +169,7 @@ func TestParseSessionList_Malformed(t *testing.T) {
 }
 
 func TestParseWindowList_Typical(t *testing.T) {
-	output := "@0\tbash\t0\t1\n@1\tvim\t1\t0\n"
+	output := "@0\tbash\t0\t1\t0\n@1\tvim\t1\t0\t1\n"
 	windows, err := ParseWindowList(output)
 	if err != nil {
 		t.Fatalf("ParseWindowList error: %v", err)
@@ -178,11 +178,26 @@ func TestParseWindowList_Typical(t *testing.T) {
 		t.Fatalf("expected 2 windows, got %d", len(windows))
 	}
 	// Sorted by index.
-	if windows[0].ID != "@0" || windows[0].Name != "bash" || windows[0].Index != 0 || !windows[0].Active {
+	if windows[0].ID != "@0" || windows[0].Name != "bash" || windows[0].Index != 0 || !windows[0].Active || windows[0].Zoomed {
 		t.Errorf("window[0] unexpected: %+v", windows[0])
 	}
-	if windows[1].ID != "@1" || windows[1].Name != "vim" || windows[1].Index != 1 || windows[1].Active {
+	if windows[1].ID != "@1" || windows[1].Name != "vim" || windows[1].Index != 1 || windows[1].Active || !windows[1].Zoomed {
 		t.Errorf("window[1] unexpected: %+v", windows[1])
+	}
+}
+
+func TestParseWindowList_WithoutZoomedFlag(t *testing.T) {
+	// Backward compat: 4-field format without zoomed flag.
+	output := "@0\tbash\t0\t1\n"
+	windows, err := ParseWindowList(output)
+	if err != nil {
+		t.Fatalf("ParseWindowList error: %v", err)
+	}
+	if len(windows) != 1 {
+		t.Fatalf("expected 1 window, got %d", len(windows))
+	}
+	if windows[0].Zoomed {
+		t.Error("expected Zoomed=false when field is missing")
 	}
 }
 

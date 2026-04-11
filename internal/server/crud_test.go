@@ -47,6 +47,9 @@ type mockManager struct {
 
 	zoomErr         error
 	lastZoomSession string
+
+	killPaneErr         error
+	lastKillPaneSession string
 }
 
 func newMockManager() *mockManager {
@@ -108,6 +111,11 @@ func (m *mockManager) PaneCwd(_ context.Context, _ string) (string, error) {
 func (m *mockManager) ZoomPane(_ context.Context, sessionName string) error {
 	m.lastZoomSession = sessionName
 	return m.zoomErr
+}
+
+func (m *mockManager) KillPane(_ context.Context, sessionName string) error {
+	m.lastKillPaneSession = sessionName
+	return m.killPaneErr
 }
 
 func newTestServer(mgr *mockManager) *Server {
@@ -429,6 +437,26 @@ func TestSplitWindow_CustomEmpty(t *testing.T) {
 	}
 }
 
+func TestSplitWindow_CustomVertical(t *testing.T) {
+	mgr := newMockManager()
+	s := newTestServer(mgr)
+
+	body := `{"preset":"custom","direction":"vertical"}`
+	req := httptest.NewRequest("POST", "/api/sessions/dev/split", bytes.NewBufferString(body))
+	req.SetPathValue("session", "dev")
+	w := httptest.NewRecorder()
+
+	s.handleSplitWindow(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Errorf("status = %d, want %d", w.Code, http.StatusOK)
+	}
+	want := tmux.SplitOpts{Horizontal: false, Percent: 50, Command: "", Detach: false}
+	if mgr.lastSplitOpts != want {
+		t.Errorf("splitOpts = %+v, want %+v", mgr.lastSplitOpts, want)
+	}
+}
+
 func TestSplitWindow_UnknownPreset(t *testing.T) {
 	mgr := newMockManager()
 	s := newTestServer(mgr)
@@ -664,6 +692,42 @@ func TestZoomPane_NotFound(t *testing.T) {
 	w := httptest.NewRecorder()
 
 	s.handleZoomPane(w, req)
+
+	if w.Code != http.StatusNotFound {
+		t.Errorf("status = %d, want %d", w.Code, http.StatusNotFound)
+	}
+}
+
+// --- Kill pane handler tests ---
+
+func TestKillPane_Success(t *testing.T) {
+	mgr := newMockManager()
+	s := newTestServer(mgr)
+
+	req := httptest.NewRequest("DELETE", "/api/sessions/dev/pane", nil)
+	req.SetPathValue("session", "dev")
+	w := httptest.NewRecorder()
+
+	s.handleKillPane(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Errorf("status = %d, want %d", w.Code, http.StatusOK)
+	}
+	if mgr.lastKillPaneSession != "dev" {
+		t.Errorf("killPaneSession = %q, want %q", mgr.lastKillPaneSession, "dev")
+	}
+}
+
+func TestKillPane_NotFound(t *testing.T) {
+	mgr := newMockManager()
+	mgr.killPaneErr = fmt.Errorf("tmux kill-pane: can't find session: nope")
+	s := newTestServer(mgr)
+
+	req := httptest.NewRequest("DELETE", "/api/sessions/nope/pane", nil)
+	req.SetPathValue("session", "nope")
+	w := httptest.NewRecorder()
+
+	s.handleKillPane(w, req)
 
 	if w.Code != http.StatusNotFound {
 		t.Errorf("status = %d, want %d", w.Code, http.StatusNotFound)

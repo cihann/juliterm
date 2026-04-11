@@ -169,8 +169,9 @@ func (s *Server) handleKillWindow(w http.ResponseWriter, r *http.Request) {
 // --- Split pane handlers ---
 
 type splitRequest struct {
-	Preset  string `json:"preset"`
-	Command string `json:"command,omitempty"`
+	Preset    string `json:"preset"`
+	Command   string `json:"command,omitempty"`
+	Direction string `json:"direction,omitempty"` // "horizontal" or "vertical" (custom preset only)
 }
 
 // presetJSON is the JSON shape returned by GET /api/presets.
@@ -275,7 +276,7 @@ func (s *Server) handleSplitWindow(w http.ResponseWriter, r *http.Request) {
 		cmd, _ := s.tmuxMgr.DetectTestCommand(r.Context(), sessionName)
 		opts = tmux.SplitOpts{Horizontal: false, Percent: 30, Command: cmd, Detach: true}
 	case "custom":
-		opts = tmux.SplitOpts{Horizontal: true, Percent: 50, Command: req.Command, Detach: false}
+		opts = tmux.SplitOpts{Horizontal: req.Direction != "vertical", Percent: 50, Command: req.Command, Detach: false}
 	default:
 		// Look up user-configured presets (project config takes priority over global).
 		var sp config.SplitPreset
@@ -329,6 +330,20 @@ func (s *Server) handleDetectTest(w http.ResponseWriter, r *http.Request) {
 	} else {
 		json.NewEncoder(w).Encode(map[string]any{"command": cmd})
 	}
+}
+
+// handleKillPane handles DELETE /api/sessions/{session}/pane.
+func (s *Server) handleKillPane(w http.ResponseWriter, r *http.Request) {
+	sessionName := r.PathValue("session")
+	if sessionName == "" {
+		writeJSONError(w, http.StatusBadRequest, "session name is required")
+		return
+	}
+	if err := s.tmuxMgr.KillPane(r.Context(), sessionName); err != nil {
+		writeJSONError(w, mapTmuxError(err), err.Error())
+		return
+	}
+	writeJSONOK(w, http.StatusOK)
 }
 
 // handleZoomPane handles POST /api/sessions/{session}/zoom.

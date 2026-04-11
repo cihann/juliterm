@@ -450,6 +450,29 @@ func (m *Manager) ZoomPane(ctx context.Context, sessionName string) error {
 	if out, err := exec.CommandContext(ctx, m.tmuxPath, "resize-pane", "-Z", "-t", sessionName).CombinedOutput(); err != nil {
 		return tmuxError("tmux resize-pane", out, err)
 	}
+	m.refreshSessionByName(sessionName)
+	return nil
+}
+
+// refreshSessionByName re-discovers window/pane details for a specific session
+// and updates the tree. Use this instead of syncSessions when a window-level
+// property (e.g. zoom state) has changed but the session set is unchanged.
+func (m *Manager) refreshSessionByName(sessionName string) {
+	for _, s := range m.tree.GetSessions() {
+		if s.Name == sessionName {
+			if session, err := m.discoverSessionDetails(s.ID); err == nil {
+				m.tree.UpdateSession(session)
+			}
+			return
+		}
+	}
+}
+
+// KillPane kills the active pane in the given session.
+func (m *Manager) KillPane(ctx context.Context, sessionName string) error {
+	if out, err := exec.CommandContext(ctx, m.tmuxPath, "kill-pane", "-t", sessionName).CombinedOutput(); err != nil {
+		return tmuxError("tmux kill-pane", out, err)
+	}
 	m.syncSessions()
 	return nil
 }
@@ -678,7 +701,7 @@ func (m *Manager) discoverSessionDetails(sessionID string) (*Session, error) {
 	// Query windows.
 	winOut, err := exec.CommandContext(m.ctx, m.tmuxPath,
 		"list-windows", "-t", sessionID,
-		"-F", "#{window_id}\t#{window_name}\t#{window_index}\t#{window_active}",
+		"-F", "#{window_id}\t#{window_name}\t#{window_index}\t#{window_active}\t#{window_zoomed_flag}",
 	).Output()
 	if err != nil {
 		return nil, fmt.Errorf("list-windows for %s: %w", sessionID, err)

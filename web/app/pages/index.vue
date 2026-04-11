@@ -114,6 +114,7 @@ const isConnected = computed(() => {
         <TerminalView
           v-if="sessionTree.selectedSessionName.value"
           :session-name="sessionTree.selectedSessionName.value"
+          @error="showError"
         />
       </div>
     </div>
