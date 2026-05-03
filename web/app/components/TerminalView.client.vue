@@ -7,6 +7,8 @@ import '@xterm/xterm/css/xterm.css'
 
 import { useTerminalSocket } from '~/composables/useTerminalSocket'
 import { useSessionApi } from '~/composables/useSessionApi'
+import { useViewportMode } from '~/composables/useViewportMode'
+import { ctrlActive, altActive } from '~/composables/useMobileKeyModifiers'
 
 const props = defineProps<{
   sessionName: string | null
@@ -20,6 +22,7 @@ const terminalRef = ref<HTMLDivElement | null>(null)
 const socket = useTerminalSocket()
 const sessionTree = useSessionTree()
 const api = useSessionApi()
+const { isMobile } = useViewportMode(1024)
 
 // Context menu state
 const ctxVisible = ref(false)
@@ -119,10 +122,23 @@ onMounted(() => {
     terminalRef.value.addEventListener('mousedown', stopRightClickPropagation, true)
   }
 
-  // Handle user input — send raw bytes directly to PTY
+  // Handle user input — send raw bytes directly to PTY.
+  // Apply sticky Ctrl/Alt modifiers set by MobileKeyBar.
   terminal.onData((data: string) => {
-    const encoded = new TextEncoder().encode(data)
-    socket.sendInput(encoded)
+    if (ctrlActive.value && data.length === 1) {
+      ctrlActive.value = false
+      const code = data.charCodeAt(0)
+      // Map printable/uppercase to control code (e.g. 'c' → ^C = 0x03)
+      const ctrl = code >= 64 ? code & 0x1f : code
+      socket.sendInput(new Uint8Array([ctrl]))
+      return
+    }
+    if (altActive.value && data.length === 1) {
+      altActive.value = false
+      socket.sendInput(new Uint8Array([0x1b, ...new TextEncoder().encode(data)]))
+      return
+    }
+    socket.sendInput(new TextEncoder().encode(data))
   })
 
   // Handle binary input (for paste, etc.)
@@ -217,6 +233,9 @@ onBeforeUnmount(() => {
 
     <!-- Terminal -->
     <div ref="terminalRef" class="terminal-element" @contextmenu="onContextMenu" />
+
+    <!-- Mobile key bar: Tab, Esc, arrows, sticky Ctrl/Alt, special chars -->
+    <MobileKeyBar v-if="isMobile" />
 
     <TerminalContextMenu
       :visible="ctxVisible"
