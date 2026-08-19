@@ -1,3 +1,5 @@
+
+
 # Juli
 
 [![CI](https://github.com/cihann/juliterm/actions/workflows/ci.yml/badge.svg)](https://github.com/cihann/juliterm/actions/workflows/ci.yml)
@@ -6,7 +8,7 @@
 
 Juli is a web-based tmux client. It runs a small Go server on your machine and lets you access your tmux sessions from any browser — on your phone, tablet, or another computer. Each browser tab connects to a real PTY running `tmux attach-session`, so it behaves exactly like a native terminal.
 
-One binary. No dependencies besides tmux.
+One binary. No dependencies besides tmux; `cloudflared` is optional and only needed for `--tunnel`.
 
 ![Juli terminal session view](img/juliterm1.png)
 
