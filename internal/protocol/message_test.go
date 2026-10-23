@@ -101,3 +101,18 @@ func TestResizePayloadMarshal(t *testing.T) {
 		t.Errorf("got %+v, want {Cols:120 Rows:40}", got)
 	}
 }
+
+func TestHeartbeatMessage(t *testing.T) {
+	frame := NewHeartbeatMessage()
+
+	msgType, payload, err := ParseMessage(frame)
+	if err != nil {
+		t.Fatalf("ParseMessage: %v", err)
+	}
+	if msgType != MsgHeartbeat {
+		t.Fatalf("type = 0x%02X, want 0x%02X", msgType, MsgHeartbeat)
+	}
+	if len(payload) != 0 {
+		t.Errorf("payload = %v, want empty", payload)
+	}
+}

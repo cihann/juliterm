@@ -45,6 +45,16 @@ type Manager struct {
 	clients map[string]*ControlClient // sessionID -> client
 	watcher *ControlClient            // dedicated watcher for %sessions-changed
 
+	// rediscover tracks per-session rediscovery goroutines (see
+	// scheduleRediscover): present = one is running, true = run once more
+	// when it finishes. Guarded by mu.
+	rediscover map[string]bool
+
+	// syncMu serializes syncSessions, which runs from the watcher, the CRUD
+	// handlers and the watcher-liveness goroutine. Concurrent runs could both
+	// add the same session and leak a control client.
+	syncMu sync.Mutex
+
 	ctx    context.Context
 	cancel context.CancelFunc
 
@@ -52,7 +62,8 @@ type Manager struct {
 	onEvent  func(event Event)                // unified event callback
 
 	// Excerpt stability tracking: detects when terminal output stops changing
-	// (agent likely waiting for user input).
+	// (agent likely waiting for user input). Guarded by mu: the poller writes
+	// them while removeSession can run from the watcher or HTTP handlers.
 	prevExcerpts       map[string]string // session ID → last captured excerpt
 	excerptStableCount map[string]int    // session ID → consecutive stable cycles
 }
@@ -66,6 +77,7 @@ func NewManager(tmuxPath string) *Manager {
 		tmuxPath:           tmuxPath,
 		tree:               NewSessionTree(),
 		clients:            make(map[string]*ControlClient),
+		rediscover:         make(map[string]bool),
 		prevExcerpts:       make(map[string]string),
 		excerptStableCount: make(map[string]int),
 	}
@@ -584,8 +596,14 @@ func (m *Manager) addSession(sessionID string) error {
 	}
 
 	m.mu.Lock()
+	old := m.clients[sessionID]
 	m.clients[sessionID] = client
 	m.mu.Unlock()
+
+	// Never orphan a running client: stop one this replaces.
+	if old != nil {
+		_ = old.Stop()
+	}
 
 	m.tree.UpdateSession(session)
 	return nil
@@ -607,13 +625,18 @@ func (m *Manager) removeSession(sessionID string) {
 	m.tree.RemoveSession(sessionID)
 
 	// Clean up excerpt stability state for this session.
+	m.mu.Lock()
 	delete(m.prevExcerpts, sessionID)
 	delete(m.excerptStableCount, sessionID)
+	m.mu.Unlock()
 }
 
 // syncSessions compares the set of currently running tmux sessions against
 // the known sessions in the tree and adds/removes as needed.
 func (m *Manager) syncSessions() {
+	m.syncMu.Lock()
+	defer m.syncMu.Unlock()
+
 	sessions, err := m.listSessions()
 	if err != nil {
 		log.Printf("tmux manager: syncSessions list failed (keeping existing tree): %v", err)
@@ -700,7 +723,7 @@ func (m *Manager) discoverSessionDetails(sessionID string) (*Session, error) {
 
 	// Query windows.
 	winOut, err := exec.CommandContext(m.ctx, m.tmuxPath,
-		"list-windows", "-t", sessionID,
+		"-u", "list-windows", "-t", sessionID,
 		"-F", "#{window_id}\t#{window_name}\t#{window_index}\t#{window_active}\t#{window_zoomed_flag}",
 	).Output()
 	if err != nil {
@@ -714,7 +737,7 @@ func (m *Manager) discoverSessionDetails(sessionID string) (*Session, error) {
 	// Query panes for each window.
 	for _, w := range windows {
 		paneOut, err := exec.CommandContext(m.ctx, m.tmuxPath,
-			"list-panes", "-t", w.ID,
+			"-u", "list-panes", "-t", w.ID,
 			"-F", "#{pane_id}\t#{pane_width}\t#{pane_height}\t#{pane_active}\t#{pane_current_command}\t#{pane_current_path}\t#{pane_pid}",
 		).Output()
 		if err != nil {
@@ -828,18 +851,21 @@ func (m *Manager) wireClientCallbacks(client *ControlClient, sessionID string) {
 		case EventWindowAdd:
 			// Re-discover the full session to pick up the new window and
 			// its panes, since %window-add only gives us the window ID.
-			s, err := m.discoverSessionDetails(sessionID)
-			if err != nil {
-				log.Printf("tmux manager: rediscover session %s after window-add: %v", sessionID, err)
-				return
-			}
-			m.tree.UpdateSession(s)
+			// It runs several tmux commands, so keep it off this read loop.
+			m.scheduleRediscover(sessionID, true)
 
 		case EventWindowClose:
 			m.tree.RemoveWindow(sessionID, event.WindowID)
+			// A rediscovery already in flight may have read tmux before this
+			// change; have it run again so it can't restore stale state.
+			m.scheduleRediscover(sessionID, false)
 
 		case EventWindowRenamed:
 			m.tree.RenameWindow(sessionID, event.WindowID, event.Name)
+			m.scheduleRediscover(sessionID, false)
+
+		case EventLayoutChanged:
+			m.scheduleRediscover(sessionID, true)
 		}
 	})
 }
@@ -854,12 +880,18 @@ func (m *Manager) startMetadataPoller(interval time.Duration) {
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
 
+	// Enrich right away, so a page loaded just after startup doesn't show
+	// sessions without their tool and git info for the first interval.
+	m.enrichMetadata()
+	m.reconcileTree()
+
 	for {
 		select {
 		case <-m.ctx.Done():
 			return
 		case <-ticker.C:
 			m.enrichMetadata()
+			m.reconcileTree()
 		}
 	}
 }
@@ -869,7 +901,7 @@ func (m *Manager) startMetadataPoller(interval time.Duration) {
 func (m *Manager) enrichMetadata() {
 	// Get all pane info in one tmux call.
 	out, err := exec.CommandContext(m.ctx, m.tmuxPath,
-		"list-panes", "-a",
+		"-u", "list-panes", "-a",
 		"-F", "#{session_id}\t#{pane_id}\t#{window_active}\t#{pane_active}\t#{pane_pid}\t#{pane_current_path}\t#{pane_current_command}\t#{pane_dead}",
 	).Output()
 	if err != nil {
@@ -944,18 +976,7 @@ func (m *Manager) enrichMetadata() {
 			excerpt = m.captureMonitoringExcerpt(info.paneID)
 		}
 
-		// Track excerpt stability: if the terminal output hasn't changed for
-		// ≥2 consecutive cycles, the agent is likely waiting for user input.
-		excerptStable := false
-		if prev, ok := m.prevExcerpts[s.ID]; ok && excerpt != "" && excerpt == prev {
-			m.excerptStableCount[s.ID]++
-			if m.excerptStableCount[s.ID] >= 2 {
-				excerptStable = true
-			}
-		} else {
-			m.excerptStableCount[s.ID] = 0
-		}
-		m.prevExcerpts[s.ID] = excerpt
+		excerptStable := m.trackExcerpt(s.ID, excerpt)
 
 		inputs := buildMonitoringInputs(s, info, psSnapshot, excerpt, now)
 		inputs.ExcerptStable = excerptStable
@@ -995,9 +1016,12 @@ func (m *Manager) enrichMetadata() {
 // It returns an error for unexpected failures. An exit code 1 with "no server
 // running" or "no sessions" output is treated as an empty list (not an error),
 // because tmux uses exit 1 for both "no sessions" and real failures.
+//
+// Every tmux query whose output we parse passes -u: without a UTF-8 locale
+// (as under launchd) tmux prints the tab separators as "_" and parsing fails.
 func (m *Manager) listSessions() ([]*Session, error) {
 	out, err := exec.CommandContext(m.ctx, m.tmuxPath,
-		"list-sessions", "-F", "#{session_id}\t#{session_name}\t#{session_activity}\t#{session_attached}",
+		"-u", "list-sessions", "-F", "#{session_id}\t#{session_name}\t#{session_activity}\t#{session_attached}",
 	).Output()
 	if err != nil {
 		// tmux returns exit 1 when there are no sessions — that's fine.
@@ -1037,4 +1061,74 @@ func escapeForTmux(s string) string {
 	}
 	b.WriteByte('"')
 	return b.String()
+}
+
+// trackExcerpt records the latest monitoring excerpt for a session and reports
+// whether it is stable: unchanged for at least 2 consecutive cycles, which
+// means the agent is likely waiting for user input.
+func (m *Manager) trackExcerpt(sessionID, excerpt string) bool {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	stable := false
+	if prev, ok := m.prevExcerpts[sessionID]; ok && excerpt != "" && excerpt == prev {
+		m.excerptStableCount[sessionID]++
+		stable = m.excerptStableCount[sessionID] >= 2
+	} else {
+		m.excerptStableCount[sessionID] = 0
+	}
+	m.prevExcerpts[sessionID] = excerpt
+	return stable
+}
+
+// scheduleRediscover re-reads a session's windows and panes from tmux in a
+// background goroutine and replaces it in the tree. At most one runs per
+// session: a request while one is running makes it run once more afterwards.
+// With start false, it only requests that rerun and never starts a new one.
+func (m *Manager) scheduleRediscover(sessionID string, start bool) {
+	m.mu.Lock()
+	if _, running := m.rediscover[sessionID]; running {
+		m.rediscover[sessionID] = true
+		m.mu.Unlock()
+		return
+	}
+	if !start {
+		m.mu.Unlock()
+		return
+	}
+	m.rediscover[sessionID] = false
+	m.mu.Unlock()
+
+	go func() {
+		for {
+			if m.ctx.Err() != nil {
+				m.mu.Lock()
+				delete(m.rediscover, sessionID)
+				m.mu.Unlock()
+				return
+			}
+			s, err := m.discoverSessionDetails(sessionID)
+
+			m.mu.Lock()
+			_, tracked := m.clients[sessionID]
+			again := m.rediscover[sessionID]
+			if again {
+				m.rediscover[sessionID] = false
+			} else {
+				delete(m.rediscover, sessionID)
+			}
+			m.mu.Unlock()
+
+			switch {
+			case err != nil:
+				log.Printf("tmux manager: rediscover session %s: %v", sessionID, err)
+			case tracked:
+				// Skip sessions removed meanwhile, so they don't reappear.
+				m.tree.UpdateSessionStructure(s)
+			}
+			if !again {
+				return
+			}
+		}
+	}()
 }

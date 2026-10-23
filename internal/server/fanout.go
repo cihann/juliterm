@@ -40,7 +40,10 @@ func (f *Fanout) UnregisterConn(wc *wsConn) {
 	f.mu.Unlock()
 }
 
-// BroadcastSessionTree sends the current session tree to every connected client.
+// BroadcastSessionTree queues the current session tree for every connected
+// client and returns without waiting for any write. It is called from tmux
+// control-mode read loops, the metadata poller and HTTP handlers, none of
+// which may stall on a slow or half-open client.
 func (f *Fanout) BroadcastSessionTree() {
 	treeJSON, err := f.tree.ToJSON()
 	if err != nil {
@@ -57,7 +60,7 @@ func (f *Fanout) BroadcastSessionTree() {
 	f.mu.RUnlock()
 
 	for _, wc := range conns {
-		_ = wc.writeMessage(msg)
+		wc.offerTree(msg)
 	}
 }
 

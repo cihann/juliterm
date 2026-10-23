@@ -85,6 +85,38 @@ func (t *SessionTree) UpdateSession(s *Session) {
 	t.notifyChange()
 }
 
+// UpdateSessionStructure replaces a session's name, windows and panes from
+// a fresh tmux read, keeping the metadata the enrichment poller fills in
+// (tool, git info, status, activity) when the fresh read leaves it empty.
+// Re-reading a session's structure must not blank that metadata until the
+// next poll, or the sidebar flickers and shifts on every pane change.
+func (t *SessionTree) UpdateSessionStructure(s *Session) {
+	t.mu.Lock()
+	fresh := cloneSession(s)
+	if old, ok := t.sessions[s.ID]; ok {
+		keep := func(dst *string, prev string) {
+			if *dst == "" {
+				*dst = prev
+			}
+		}
+		keep(&fresh.Status, old.Status)
+		keep(&fresh.ToolType, old.ToolType)
+		keep(&fresh.GitBranch, old.GitBranch)
+		keep(&fresh.GitRepo, old.GitRepo)
+		keep(&fresh.WorkingDir, old.WorkingDir)
+		keep(&fresh.ActivitySummary, old.ActivitySummary)
+		if fresh.ActivityState == "" {
+			fresh.ActivityState = old.ActivityState
+		}
+		if fresh.LastActivity == 0 {
+			fresh.LastActivity = old.LastActivity
+		}
+	}
+	t.sessions[s.ID] = fresh
+	t.mu.Unlock()
+	t.notifyChange()
+}
+
 // UpdateSessionMetadata applies a mutation function to a session's metadata
 // fields without replacing its windows or panes. The onChange callback is NOT
 // called — the caller is responsible for batching notifications.

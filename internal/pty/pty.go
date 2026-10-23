@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"strings"
 	"sync"
 	"syscall"
 	"unsafe"
@@ -32,8 +33,11 @@ func Attach(tmuxPath, sessionName string, cols, rows uint16) (*Session, error) {
 		tmuxPath = "tmux"
 	}
 
-	cmd := exec.Command(tmuxPath, "attach-session", "-t", sessionName)
-	cmd.Env = append(os.Environ(), "TERM=xterm-256color")
+	// -u: tmux assumes a UTF-8 terminal whatever the locale. Under launchd
+	// there is no LANG, and tmux would otherwise draw line characters and
+	// non-ASCII text with ASCII fallbacks or underscores.
+	cmd := exec.Command(tmuxPath, "-u", "attach-session", "-t", sessionName)
+	cmd.Env = append(withoutTmuxEnv(os.Environ()), "TERM=xterm-256color")
 
 	f, err := pty.StartWithSize(cmd, &pty.Winsize{
 		Cols: cols,
@@ -122,4 +126,17 @@ func (s *Session) Close() error {
 		}
 	})
 	return closeErr
+}
+
+// withoutTmuxEnv returns env minus TMUX and TMUX_PANE. When juli itself runs
+// inside tmux, an inherited TMUX makes tmux refuse to nest the attach.
+func withoutTmuxEnv(env []string) []string {
+	out := make([]string, 0, len(env))
+	for _, kv := range env {
+		if strings.HasPrefix(kv, "TMUX=") || strings.HasPrefix(kv, "TMUX_PANE=") {
+			continue
+		}
+		out = append(out, kv)
+	}
+	return out
 }

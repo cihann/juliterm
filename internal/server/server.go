@@ -47,6 +47,7 @@ type Server struct {
 	token   string // shared auth token
 	tmuxMgr SessionManager
 	cfg     *config.Config
+	name    string // machine name for title, Home Screen name and icon
 	fanout  *Fanout
 
 	sessionSecret []byte          // random secret for cookie signing
@@ -156,6 +157,13 @@ func (s *Server) StartTLS(ctx context.Context, certFile, keyFile string) error {
 // setupRoutes registers all HTTP handlers on the given mux.
 func (s *Server) setupRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("/api/login", s.handleLogin)
+	// Machine identity (public: shown on the login page and fetched by the
+	// browser when adding a Home Screen shortcut).
+	mux.HandleFunc("GET /api/identity", s.handleIdentity)
+	mux.HandleFunc("GET /manifest.webmanifest", s.handleManifest)
+	mux.HandleFunc("GET /apple-touch-icon.png", s.iconHandler(180))
+	mux.HandleFunc("GET /apple-touch-icon-precomposed.png", s.iconHandler(180))
+	mux.HandleFunc("GET /icon-512.png", s.iconHandler(512))
 	mux.HandleFunc("/api/logout", s.handleLogout)
 	mux.Handle("GET /api/sessions", s.authMiddleware(http.HandlerFunc(s.handleSessions)))
 	mux.HandleFunc("/ws", s.handleWebSocket)

@@ -13,6 +13,7 @@ const MSG = {
   SESSION_TREE: 0x04,   // bidirectional: JSON session tree / session select
   SELECT_WINDOW: 0x05,  // client→server: JSON {sessionName, windowIndex}
   ERROR: 0x07,          // server→client: JSON error
+  HEARTBEAT: 0x08,      // server→client: empty liveness frame
 } as const
 
 type Callback<T> = (data: T) => void
@@ -22,24 +23,52 @@ interface ErrorPayload {
   message: string
 }
 
+interface TerminalSize {
+  cols: number
+  rows: number
+}
+
 // ---- Module-scoped singleton state ----
 
 const connected = ref(false)
 const reconnecting = ref(false)
 const error = ref<string | null>(null)
 
+// The server sends a heartbeat every 25s, so a connection that has delivered
+// nothing for a minute is dead even if the browser still reports it open
+// (laptop sleep, network switch).
+const LIVENESS_CHECK_MS = 10_000
+const STALE_AFTER_MS = 60_000
+const MIN_RECONNECT_DELAY = 500
+
 let ws: WebSocket | null = null
 let reconnectTimer: ReturnType<typeof setTimeout> | null = null
-let reconnectDelay = 500
+let reconnectDelay = MIN_RECONNECT_DELAY
 let intentionallyClosed = false
+let lastMessageAt = 0
+let livenessTimer: ReturnType<typeof setInterval> | null = null
+let lifecycleListening = false
 
 // Use Set for O(1) add/delete, prevents duplicates
 const onOutputCbs = new Set<Callback<Uint8Array>>()
 const onSessionTreeCbs = new Set<Callback<unknown[]>>()
 const onErrorCbs = new Set<Callback<ErrorPayload>>()
 
+const onReconnectCbs = new Set<() => void>()
+
 // Buffer last session tree so late subscribers get it immediately
 let lastSessionTree: unknown[] | null = null
+
+// The session this browser is showing and its terminal size. The server only
+// attaches a PTY when it receives a session select, so both are replayed every
+// time a connection opens: after a reconnect, and when the session was picked
+// before the socket finished connecting.
+let currentSession: string | null = null
+let lastSize: TerminalSize | null = null
+
+// Other control frames (window selection) sent while not connected, flushed
+// once the session has been re-selected.
+let pendingControl: Uint8Array[] = []
 
 // ---- Internal helpers ----
 
@@ -56,6 +85,9 @@ function connect() {
 
   intentionallyClosed = false
   error.value = null
+  watchLiveness()
+
+  let opened = false
 
   try {
     ws = new WebSocket(getWsUrl())
@@ -67,10 +99,19 @@ function connect() {
   }
 
   ws.onopen = () => {
+    opened = true
     connected.value = true
     reconnecting.value = false
-    reconnectDelay = 500
+    reconnectDelay = MIN_RECONNECT_DELAY
     error.value = null
+    lastMessageAt = Date.now()
+
+    if (currentSession) {
+      reattach()
+    }
+    const queued = pendingControl
+    pendingControl = []
+    for (const frame of queued) send(frame)
   }
 
   ws.onclose = (event: CloseEvent) => {
@@ -80,14 +121,16 @@ function connect() {
     // Close code 4001 = session revoked by server (logout or expiry).
     // Stop reconnecting and redirect to login.
     if (event.code === 4001) {
-      intentionallyClosed = true
-      resetAuth()
-      window.location.href = '/login'
+      goToLogin()
       return
     }
 
     if (!intentionallyClosed) {
       scheduleReconnect()
+      // A refused upgrade (expired login, or the server restarted and lost
+      // its in-memory sessions) surfaces as a plain 1006 close, so check
+      // whether we are still logged in rather than retry forever.
+      if (!opened) void checkAuth()
     }
   }
 
@@ -96,6 +139,7 @@ function connect() {
   }
 
   ws.onmessage = (event: MessageEvent) => {
+    lastMessageAt = Date.now()
     if (!(event.data instanceof ArrayBuffer)) return
     const buf = new Uint8Array(event.data)
     if (buf.length === 0) return
@@ -117,10 +161,97 @@ function connect() {
       case MSG.ERROR:
         try {
           const parsed = JSON.parse(new TextDecoder().decode(payload)) as ErrorPayload
+          // The server got input with no session attached: attach again
+          // rather than keep typing into nothing.
+          if (parsed.code === 'not_attached' && currentSession) {
+            reattach()
+          }
           for (const cb of onErrorCbs) cb(parsed)
         } catch { /* ignore malformed JSON */ }
         break
+      case MSG.HEARTBEAT:
+        break
     }
+  }
+}
+
+function goToLogin() {
+  intentionallyClosed = true
+  if (reconnectTimer) {
+    clearTimeout(reconnectTimer)
+    reconnectTimer = null
+  }
+  resetAuth()
+  window.location.href = '/login'
+}
+
+async function checkAuth() {
+  try {
+    const res = await fetch('/api/sessions', { credentials: 'same-origin' })
+    if (res.status === 401 && !intentionallyClosed) goToLogin()
+  } catch {
+    // Server unreachable: keep retrying the WebSocket.
+  }
+}
+
+// Drop a connection that stopped delivering frames. Its close handshake would
+// wait on a dead network, so detach it and reconnect right away.
+function abandonSocket() {
+  if (!ws) return
+  const dead = ws
+  ws = null
+  dead.onopen = null
+  dead.onclose = null
+  dead.onerror = null
+  dead.onmessage = null
+  try { dead.close() } catch { /* already closed */ }
+  connected.value = false
+  scheduleReconnect()
+}
+
+// A hidden tab must not reconnect: attaching makes it tmux's newest client,
+// so the shared window would shrink to this device's size while nobody is
+// looking at it. iPadOS wakes background tabs every so often, which used to
+// resize tmux to the iPad's size with no one using juli. Reconnecting waits
+// until the tab is visible again (see onVisibilityChange).
+function pageHidden() {
+  return typeof document !== 'undefined' && document.visibilityState === 'hidden'
+}
+
+function checkLiveness() {
+  if (isOpen() && Date.now() - lastMessageAt > STALE_AFTER_MS) {
+    abandonSocket()
+  }
+}
+
+// The tab became visible or the network came back: verify the connection now
+// and, if it's down, reconnect immediately instead of waiting out a backoff
+// that may have grown to 30s.
+function wake() {
+  if (intentionallyClosed || pageHidden()) return
+  checkLiveness()
+  reconnectDelay = MIN_RECONNECT_DELAY
+  if (!ws) {
+    if (reconnectTimer) {
+      clearTimeout(reconnectTimer)
+      reconnectTimer = null
+    }
+    connect()
+  }
+}
+
+function onVisibilityChange() {
+  if (document.visibilityState === 'visible') wake()
+}
+
+function watchLiveness() {
+  if (!livenessTimer) {
+    livenessTimer = setInterval(checkLiveness, LIVENESS_CHECK_MS)
+  }
+  if (!lifecycleListening) {
+    lifecycleListening = true
+    document.addEventListener('visibilitychange', onVisibilityChange)
+    window.addEventListener('online', wake)
   }
 }
 
@@ -134,6 +265,8 @@ function scheduleReconnect() {
 
   reconnectTimer = setTimeout(() => {
     reconnectTimer = null
+    // Hidden: leave it to wake() when the tab is shown again.
+    if (pageHidden()) return
     reconnectDelay = Math.min(reconnectDelay * 2, 30000)
     connect()
   }, delay)
@@ -143,6 +276,23 @@ function send(data: Uint8Array) {
   if (ws && ws.readyState === WebSocket.OPEN) {
     ws.send(data)
   }
+}
+
+function sendSelect() {
+  if (!currentSession) return
+  send(buildJsonFrame(MSG.SESSION_TREE, { sessionName: currentSession, ...lastSize }))
+}
+
+// Attach the current session again on this connection. tmux repaints the
+// whole screen on attach, so subscribers reset their terminal first.
+function reattach() {
+  for (const cb of onReconnectCbs) cb()
+  sendSelect()
+  if (lastSize) send(buildJsonFrame(MSG.RESIZE, lastSize))
+}
+
+function isOpen(): boolean {
+  return ws !== null && ws.readyState === WebSocket.OPEN
 }
 
 function buildJsonFrame(msgType: number, payload: object): Uint8Array {
@@ -159,6 +309,15 @@ function disconnect() {
     clearTimeout(reconnectTimer)
     reconnectTimer = null
   }
+  if (livenessTimer) {
+    clearInterval(livenessTimer)
+    livenessTimer = null
+  }
+  if (lifecycleListening) {
+    lifecycleListening = false
+    document.removeEventListener('visibilitychange', onVisibilityChange)
+    window.removeEventListener('online', wake)
+  }
   if (ws) {
     ws.close()
     ws = null
@@ -174,12 +333,26 @@ export function useTerminalSocket() {
   // auth is confirmed. The auth middleware validates the cookie first,
   // and only then should the WebSocket be opened.
 
-  function selectSession(sessionName: string) {
-    send(buildJsonFrame(MSG.SESSION_TREE, { sessionName }))
+  /**
+   * Attach this connection to a session, optionally at a known terminal size
+   * so the server attaches at the right size instead of 80x24. When the
+   * socket isn't open yet, the select is sent as soon as it opens.
+   */
+  function selectSession(sessionName: string, size?: TerminalSize) {
+    currentSession = sessionName
+    if (size) lastSize = size
+    if (isOpen()) sendSelect()
+  }
+
+  /** Forget the current session (e.g. when returning to the session grid). */
+  function clearSession() {
+    currentSession = null
   }
 
   function selectWindow(sessionName: string, windowIndex: number) {
-    send(buildJsonFrame(MSG.SELECT_WINDOW, { sessionName, windowIndex }))
+    const frame = buildJsonFrame(MSG.SELECT_WINDOW, { sessionName, windowIndex })
+    if (isOpen()) send(frame)
+    else pendingControl.push(frame)
   }
 
   function sendInput(data: Uint8Array) {
@@ -190,7 +363,8 @@ export function useTerminalSocket() {
   }
 
   function sendResize(cols: number, rows: number) {
-    send(buildJsonFrame(MSG.RESIZE, { cols, rows }))
+    lastSize = { cols, rows }
+    send(buildJsonFrame(MSG.RESIZE, lastSize))
   }
 
   /** Subscribe to PTY output. Returns unsubscribe function. */
@@ -208,6 +382,15 @@ export function useTerminalSocket() {
     return () => { onSessionTreeCbs.delete(cb) }
   }
 
+  /**
+   * Subscribe to re-attaches: after a reconnect, or when the server reported
+   * that nothing was attached. Returns unsubscribe function.
+   */
+  function onReconnect(cb: () => void): () => void {
+    onReconnectCbs.add(cb)
+    return () => { onReconnectCbs.delete(cb) }
+  }
+
   /** Subscribe to server errors. Returns unsubscribe function. */
   function onError(cb: Callback<ErrorPayload>): () => void {
     onErrorCbs.add(cb)
@@ -219,6 +402,7 @@ export function useTerminalSocket() {
     reconnecting: readonly(reconnecting),
     error: readonly(error),
     selectSession,
+    clearSession,
     selectWindow,
     sendInput,
     sendResize,
@@ -226,8 +410,9 @@ export function useTerminalSocket() {
     connect,
     onOutput,
     onSessionTree,
+    onReconnect,
     onError,
   }
 }
 
-export type { ErrorPayload }
+export type { ErrorPayload, TerminalSize }

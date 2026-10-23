@@ -3,6 +3,9 @@ import { ref, watch, nextTick } from 'vue'
 import type { Session } from '~/composables/useSessionTree'
 import { useTimeAgo } from '~/composables/useTimeAgo'
 import { useSessionApi } from '~/composables/useSessionApi'
+import { useLinkBrowser } from '~/composables/useLinkBrowser'
+import { useIdentity } from '~/composables/useIdentity'
+import { LINK_BROWSERS, isStandaloneApp, type LinkBrowser } from '~/utils/linkBrowser'
 
 const props = defineProps<{
   sessions: Session[]
@@ -17,6 +20,15 @@ const emit = defineEmits<{
 
 const { tick, formatTimeAgo } = useTimeAgo()
 const api = useSessionApi()
+const { name: machineName } = useIdentity()
+
+// Only an installed (Home Screen) web app opens links in an in-app browser,
+// so that's the only place the choice is offered.
+const showLinkSetting = isStandaloneApp()
+const { linkBrowser, setLinkBrowser } = useLinkBrowser()
+function onLinkBrowserChange(e: Event) {
+  setLinkBrowser((e.target as HTMLSelectElement).value as LinkBrowser)
+}
 const { logout } = useLogout()
 
 // --- State ---
@@ -221,7 +233,10 @@ function handleCancel() {
 <template>
   <aside class="session-tree">
     <div class="tree-header">
-      <span class="brand">Juli</span>
+      <span class="brand">
+        Juli
+        <span v-if="machineName" class="machine-name">{{ machineName }}</span>
+      </span>
       <div class="tree-header-actions">
         <button class="btn-add" title="New session" @click="startCreateSession">+</button>
         <button class="btn-logout" title="Logout" @click="logout">&#x23FB;</button>
@@ -331,6 +346,15 @@ function handleCancel() {
       </div>
     </div>
 
+    <div v-if="showLinkSetting" class="tree-footer">
+      <label class="link-setting">
+        Open links in
+        <select :value="linkBrowser" @change="onLinkBrowserChange">
+          <option v-for="b in LINK_BROWSERS" :key="b.value" :value="b.value">{{ b.label }}</option>
+        </select>
+      </label>
+    </div>
+
     <ConfirmDialog
       :visible="confirmVisible"
       :title="confirmTitle"
@@ -346,13 +370,38 @@ function handleCancel() {
 <style scoped>
 .session-tree {
   width: 240px;
-  min-width: 240px;
+  flex-shrink: 0;
   background: #161b22;
   border-right: 1px solid #21262d;
   overflow-y: auto;
   display: flex;
   flex-direction: column;
   user-select: none;
+}
+
+.tree-footer {
+  margin-top: auto;
+  padding: 10px 16px;
+  border-top: 1px solid #21262d;
+}
+
+.link-setting {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  font-size: 11px;
+  color: #8b949e;
+}
+
+.link-setting select {
+  background: #0d1117;
+  color: #c9d1d9;
+  border: 1px solid #30363d;
+  border-radius: 4px;
+  /* 16px keeps iPadOS from zooming the page when the picker gets focus. */
+  font-size: 16px;
+  padding: 2px 4px;
 }
 
 .tree-header {
@@ -368,6 +417,14 @@ function handleCancel() {
   font-size: 14px;
   color: #58a6ff;
   letter-spacing: -0.02em;
+}
+
+.machine-name {
+  display: block;
+  font-weight: 400;
+  font-size: 11px;
+  color: #8b949e;
+  letter-spacing: 0;
 }
 
 .tree-header-actions {

@@ -180,4 +180,34 @@ describe('ViewerBar', () => {
     await wrapper.find('.zoom-button').trigger('click')
     expect(mockZoomPane).toHaveBeenCalledWith('dev')
   })
+
+  it('emits toggleSidebar from the sidebar button', async () => {
+    const wrapper = mount(ViewerBar, {
+      props: { sessionName: 'dev', connected: true },
+      global: { stubs },
+    })
+
+    const toggle = wrapper.find('.sidebar-toggle')
+    expect(toggle.attributes('title')).toBe('Hide sidebar')
+    await toggle.trigger('click')
+    expect(wrapper.emitted('toggleSidebar')).toHaveLength(1)
+  })
+
+  it('labels the sidebar button for showing a collapsed sidebar', () => {
+    const wrapper = mount(ViewerBar, {
+      props: { sessionName: 'dev', connected: true, sidebarCollapsed: true },
+      global: { stubs },
+    })
+
+    expect(wrapper.find('.sidebar-toggle').attributes('title')).toBe('Show sidebar')
+  })
+
+  it('hides the sidebar button in compact mode', () => {
+    const wrapper = mount(ViewerBar, {
+      props: { sessionName: 'dev', connected: true, compact: true },
+      global: { stubs },
+    })
+
+    expect(wrapper.find('.sidebar-toggle').exists()).toBe(false)
+  })
 })

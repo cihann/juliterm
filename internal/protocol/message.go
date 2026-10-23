@@ -16,6 +16,7 @@ const (
 	MsgSessionTree   byte = 0x04 // server→client: JSON session tree
 	MsgSelectWindow  byte = 0x05 // client→server: JSON {sessionName, windowIndex}
 	MsgError         byte = 0x07 // server→client: JSON error
+	MsgHeartbeat     byte = 0x08 // server→client: empty liveness frame
 )
 
 // ErrEmptyMessage is returned when parsing an empty frame.
@@ -53,6 +54,13 @@ func ParseMessage(data []byte) (msgType byte, payload []byte, err error) {
 func NewErrorMessage(code, message string) []byte {
 	p, _ := json.Marshal(ErrorPayload{Code: code, Message: message})
 	return NewMessage(MsgError, p)
+}
+
+// NewHeartbeatMessage builds an empty MsgHeartbeat frame. Browsers cannot see
+// WebSocket ping frames, so the server sends these periodically to let the
+// client detect a dead connection.
+func NewHeartbeatMessage() []byte {
+	return NewMessage(MsgHeartbeat, nil)
 }
 
 // NewSessionTreeMessage wraps pre-serialized JSON in a MsgSessionTree frame.

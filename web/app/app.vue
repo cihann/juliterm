@@ -1,3 +1,9 @@
+<script setup lang="ts">
+// Name the tab and Home Screen shortcut after this machine on every page,
+// the login page included.
+useIdentity()
+</script>
+
 <template>
   <NuxtPage />
 </template>
@@ -11,6 +17,13 @@ html, body, #__nuxt {
   background: #0d1117;
   color: #c9d1d9;
   font-family: 'SF Mono', 'Cascadia Code', 'Fira Code', 'Menlo', monospace;
+}
+
+/* The app fills the visible area itself; the page never scrolls or
+   rubber-bands (iPadOS would otherwise shift it under the keyboard). */
+html, body {
+  overflow: hidden;
+  overscroll-behavior: none;
 }
 
 *, *::before, *::after {

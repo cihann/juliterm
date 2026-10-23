@@ -22,6 +22,13 @@ export default defineNuxtConfig({
       meta: [
         { name: 'viewport', content: 'width=device-width, initial-scale=1' },
       ],
+      // Per-machine name and icon, served by juli itself (see
+      // internal/server/identity.go). The manifest is fetched with
+      // credentials so it passes an auth proxy such as Cloudflare Access.
+      link: [
+        { rel: 'apple-touch-icon', href: '/apple-touch-icon.png' },
+        { rel: 'manifest', href: '/manifest.webmanifest', crossorigin: 'use-credentials' },
+      ],
     },
   },
 })

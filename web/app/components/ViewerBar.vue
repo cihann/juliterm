@@ -8,11 +8,13 @@ const props = defineProps<{
   connected: boolean
   compact?: boolean
   sessions?: Session[]
+  sidebarCollapsed?: boolean
 }>()
 
 const emit = defineEmits<{
   back: []
   error: [message: string]
+  toggleSidebar: []
 }>()
 
 const api = useSessionApi()
@@ -38,6 +40,19 @@ async function handleZoom() {
 <template>
   <header class="viewer-bar" :class="{ compact }">
     <div class="viewer-bar-left">
+      <button
+        v-if="!compact"
+        class="sidebar-toggle"
+        :class="{ 'sidebar-toggle--collapsed': sidebarCollapsed }"
+        type="button"
+        :title="sidebarCollapsed ? 'Show sidebar' : 'Hide sidebar'"
+        :aria-pressed="!sidebarCollapsed"
+        @click="emit('toggleSidebar')"
+      >
+        <svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor">
+          <path d="M2 2h12a1 1 0 0 1 1 1v10a1 1 0 0 1-1 1H2a1 1 0 0 1-1-1V3a1 1 0 0 1 1-1zm0 1v10h3V3H2zm4 0v10h8V3H6z" />
+        </svg>
+      </button>
       <button class="back-button" type="button" @click="emit('back')">
         Sessions
       </button>
@@ -90,6 +105,34 @@ async function handleZoom() {
   display: flex;
   align-items: center;
   gap: 16px;
+}
+
+.sidebar-toggle {
+  height: 24px;
+  width: 24px;
+  margin-right: -8px;
+  border: 1px solid #30363d;
+  border-radius: 4px;
+  background: none;
+  color: #e6edf3;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: background 0.1s, color 0.1s;
+}
+
+.sidebar-toggle:hover {
+  background: #21262d;
+}
+
+.sidebar-toggle:focus-visible {
+  outline: 2px solid #1f6feb;
+  outline-offset: 2px;
+}
+
+.sidebar-toggle--collapsed {
+  color: #8b949e;
 }
 
 .back-button {

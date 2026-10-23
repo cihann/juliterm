@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"os"
 	"os/exec"
 	"strconv"
 	"strings"
@@ -32,6 +33,10 @@ const (
 	EventPanePause
 	EventPaneContinue
 	EventPaneModeChanged
+	// EventLayoutChanged reports a structural change the event itself doesn't
+	// describe (panes split, closed or moved, active window or pane changed,
+	// windows changing in other sessions); the session should be re-read.
+	EventLayoutChanged
 )
 
 // Event represents a single asynchronous notification from tmux.
@@ -116,7 +121,15 @@ func (c *ControlClient) Start() error {
 		return fmt.Errorf("tmux: control client already started")
 	}
 
-	c.cmd = exec.CommandContext(c.ctx, c.tmuxPath, "-C", "attach-session", "-t", c.sessionID)
+	// -u keeps tmux from replacing non-ASCII characters (including the
+	// separators in our format strings) with "_" when there is no UTF-8
+	// locale, as under launchd.
+	// -f no-output: juli only uses control mode for structure events
+	// (windows, sessions); terminal output reaches the browser through its
+	// own PTY. Without it tmux streams every pane's output here as %output,
+	// which nothing consumes.
+	c.cmd = exec.CommandContext(c.ctx, c.tmuxPath, "-u", "-C", "attach-session", "-f", "no-output", "-t", c.sessionID)
+	c.cmd.Env = withoutTmuxEnv(os.Environ())
 
 	stdinPipe, err := c.cmd.StdinPipe()
 	if err != nil {
@@ -269,6 +282,18 @@ func (c *ControlClient) dispatchLine(line string) {
 		pid := strings.TrimPrefix(line, "%pane-mode-changed ")
 		c.emit(Event{Type: EventPaneModeChanged, PaneID: pid})
 
+	case line == "%layout-change",
+		strings.HasPrefix(line, "%layout-change "),
+		strings.HasPrefix(line, "%window-pane-changed "),
+		strings.HasPrefix(line, "%session-window-changed "),
+		strings.HasPrefix(line, "%unlinked-window-add "),
+		strings.HasPrefix(line, "%unlinked-window-close "),
+		strings.HasPrefix(line, "%unlinked-window-renamed "):
+		// Panes split, closed or moved between windows (join-pane), the
+		// active window or pane changed, or windows changed outside this
+		// session. None carries enough to patch the tree, so re-read it.
+		c.emit(Event{Type: EventLayoutChanged})
+
 	case strings.HasPrefix(line, "%begin "), strings.HasPrefix(line, "%end "):
 		// Command response delimiters — ignored for now.
 
@@ -276,8 +301,6 @@ func (c *ControlClient) dispatchLine(line string) {
 		strings.HasPrefix(line, "%client-session-changed "),
 		strings.HasPrefix(line, "%client-detached "),
 		strings.HasPrefix(line, "%config-error "),
-		line == "%layout-change",
-		strings.HasPrefix(line, "%layout-change "),
 		strings.HasPrefix(line, "%subscription-changed "),
 		strings.HasPrefix(line, "%exit"):
 		// Known but unneeded notifications — silently ignore.
@@ -395,4 +418,17 @@ func splitFirst(s string) (string, string) {
 		return s, ""
 	}
 	return s[:i], s[i+1:]
+}
+
+// withoutTmuxEnv returns env minus TMUX and TMUX_PANE. When juli itself runs
+// inside tmux, an inherited TMUX makes tmux refuse to nest the attach.
+func withoutTmuxEnv(env []string) []string {
+	out := make([]string, 0, len(env))
+	for _, kv := range env {
+		if strings.HasPrefix(kv, "TMUX=") || strings.HasPrefix(kv, "TMUX_PANE=") {
+			continue
+		}
+		out = append(out, kv)
+	}
+	return out
 }

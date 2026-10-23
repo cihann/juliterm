@@ -574,3 +574,26 @@ func searchStr(haystack, needle string) bool {
 	}
 	return false
 }
+
+// ===========================================================================
+// Structural notifications re-read the session
+// ===========================================================================
+
+func TestDispatchLine_StructuralChangesEmitLayoutChanged(t *testing.T) {
+	for _, line := range []string{
+		"%layout-change @2 b25d,212x55,0,0{106x55,0,0,8,105x55,107,0,9} b25d,212x55,0,0{106x55,0,0,8,105x55,107,0,9} *",
+		"%window-pane-changed @15 %145",
+		"%session-window-changed $0 @2",
+		"%unlinked-window-add @20",
+		"%unlinked-window-close @20",
+		"%unlinked-window-renamed @15 fennec",
+	} {
+		c := &ControlClient{}
+		var got []Event
+		c.OnEvent(func(e Event) { got = append(got, e) })
+		c.dispatchLine(line)
+		if len(got) != 1 || got[0].Type != EventLayoutChanged {
+			t.Errorf("%q: events = %+v, want one EventLayoutChanged", line, got)
+		}
+	}
+}

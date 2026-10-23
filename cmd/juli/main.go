@@ -27,6 +27,7 @@ func main() {
 	tlsKey := flag.String("tls-key", "", "path to TLS private key file")
 	tunnelFlag := flag.Bool("tunnel", false, "expose Juli via Cloudflare Quick Tunnel (requires cloudflared)")
 	configPath := flag.String("config", "", "path to config file (default: ~/.config/juli/config.yaml)")
+	name := flag.String("name", "", "machine name for the page title, Home Screen name and icon (default: short hostname)")
 	flag.Parse()
 
 	if *token == "" {
@@ -62,6 +63,10 @@ func main() {
 
 	// Initialize HTTP server
 	srv := server.New(*port, *token, mgr, webFileSystem(), cfg)
+	if *name == "" {
+		*name = server.DefaultName()
+	}
+	srv.SetName(*name)
 
 	// Tunnel: start concurrently so the local server is not blocked.
 	if *tunnelFlag {
